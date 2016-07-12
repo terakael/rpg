@@ -30,9 +30,8 @@ public:
     void Start()
     {
         std::cout << "Starting" << std::endl;
-        mMessage = "asdfasdfdsaf";//todo
-        std::cout << "Message: " << mMessage << std::endl;
-        boost::asio::async_write(mSocket, boost::asio::buffer(mMessage), boost::bind(&TcpConnection::HandleWrite, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+
+        mSocket.async_read_some(boost::asio::buffer(mMessage, MAX_LENGTH), boost::bind(&TcpConnection::HandleRead, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
     }
 
 private:
@@ -42,13 +41,25 @@ private:
 
     }
 
-    void HandleWrite(const boost::system::error_code& error, size_t bytesTransferred)
+    void HandleWrite(const boost::system::error_code& error)
     {
-        std::cout << "Handling write: error=\"" << error.message() << "\"; bytesTransferred: " << bytesTransferred;
+        if (!error)
+        {
+            std::cout << "Message: " << mMessage << std::endl;
+            mSocket.async_read_some(boost::asio::buffer(mMessage, MAX_LENGTH), boost::bind(&TcpConnection::HandleRead, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+        }
+    }
+
+    void HandleRead(const boost::system::error_code& error, size_t bytesTransferred)
+    {
+        if (!error)
+            boost::asio::async_write(mSocket, boost::asio::buffer(mMessage, bytesTransferred), boost::bind(&TcpConnection::HandleWrite, shared_from_this(), boost::asio::placeholders::error));
     }
 
     tcp::socket mSocket;
-    std::string mMessage;
+    //std::string mMessage;
+    enum {MAX_LENGTH = 1024};
+    char mMessage[MAX_LENGTH];
 };
 
 class TcpServer
