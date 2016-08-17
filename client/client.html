@@ -2,44 +2,14 @@
 <html>
 	<head>
         <!-- http://www.developerfusion.com/article/143158/an-introduction-to-websockets/ -->
-		<script type="text/javascript">
-			function WebSocketTest()
-			{
-				if (window.WebSocket !== undefined)
-				{
-					alert("Supported!");
-					
-					var ws = new WebSocket("ws://127.0.0.1:45555");
-					
-					ws.onopen = function() {
-						ws.send("Message to send");
-						alert("Message is sent!");
-					}
-					
-					ws.onmessage = function(evt) {
-						var received = evt.data;
-						alert("Message is received: " + received);
-					}
-					
-					ws.onclose = function() {
-						alert("Connection is closed");
-					}
-					
-					ws.onerror = function(evt) {
-						alert("Error: " + evt);
-					}
-				}
-				else
-				{
-					alert("Not supported :S");
-				}
-			}
-		</script>
+
+		<script src="./client.js" defer></script>
 		<title>hi</title>
 	</head>
 	<body>
 		<div>
-			<a href="javascript:WebSocketTest()">Run Websocket</a>
+			<button id="Handshake">Handshake</button>
+			<button id="Message">Message</button>
 		</div>
 	</body>
 </html>

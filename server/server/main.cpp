@@ -10,15 +10,11 @@
 #include <openssl/sha.h>
 #include <ctime>
 
+#define htonll(x) ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32))
+
 using boost::asio::ip::tcp;
 
 const std::string WS_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";// magic string for WebSockets
-
-std::string makeDaytimeString()
-{
-    std::time_t now = std::time(0);
-    return std::ctime(&now);
-}
 
 class TcpConnection : public boost::enable_shared_from_this<TcpConnection>
 {
@@ -55,6 +51,7 @@ private:
         {
             std::cout << "Message: " << mFullBuffer << std::endl;
             mFullBuffer = "";
+            memset(mMessage, 0, MAX_LENGTH);
             mSocket.async_read_some(boost::asio::buffer(mMessage, MAX_LENGTH), boost::bind(&TcpConnection::HandleRead, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
         }
     }
@@ -67,10 +64,20 @@ private:
         if (buf.find("\r\n\r\n") != std::string::npos)
         {
             isEof = true;
-            buf = buf.substr(0, buf.find_first_of("\r\n\r\n") + 2);
+            buf = buf.substr(0, buf.find("\r\n\r\n") + 2);
         }
 
         mFullBuffer += buf;
+
+
+        static const std::string keyTag = "Sec-WebSocket-Key: ";
+        if (mFullBuffer.find(keyTag) == -1)
+        {
+            // not a handshake
+            int maskOffset = 2;
+            int len = decodePayloadLength(mMessage, maskOffset);
+            std::string data = unmaskData(mMessage, len, maskOffset);
+        }
 
         // given the handshake request looks like this:
         /*
@@ -95,8 +102,6 @@ private:
 
         if (isEof)
         {
-            const std::string keyTag = "Sec-WebSocket-Key: ";
-
             const size_t startElement = mFullBuffer.find(keyTag) + keyTag.size();
             const size_t endElement = mFullBuffer.find("\r\n", startElement);
             std::string key = mFullBuffer.substr(startElement, endElement - startElement);
@@ -130,6 +135,64 @@ private:
         }
      }
 
+
+    const int decodePayloadLength(const char* bytes, int& maskOffset)
+    {
+        // payloadLen is in the second byte (byte[1]), between bits 1-7 (excl. bit 0)
+        static const int msb = 7;
+        static const int lsb = 1;
+        unsigned int len = 0;
+
+        // exclude the first bit of bytes[1] i.e. AND with 0111 1111 (dec 127)
+        
+        unsigned int result = bytes[1] & 127;
+        switch (result)
+        {
+        case 127:
+            // read the next 64 bits and interpret those as an unsigned integer (the most significant bit MUST be 0).
+        {
+            // use htonll here
+            len = (unsigned int)htonll(*(uint64_t*)(bytes + 2));
+            maskOffset = 10;// masking key starts at the 10th byte
+            break;
+        }
+        case 126:
+        {
+            // read the next 16 bits and interpret those as an unsigned integer.
+            len = (unsigned int)htons(*(uint16_t*)(bytes + 2));
+            maskOffset = 4;// masking key starts at the 4th byte
+            break;
+        }
+        default:
+            len = result;
+            maskOffset = 2;// masking key starts at the 2nd byte
+            break;
+        }
+
+        return len;
+    }
+
+    const std::string unmaskData(const char* bytes, const unsigned int len, const unsigned int maskOffset)
+    {
+        // check if the mask bit was set first
+        // we want  _
+        // this bit 1000 0000
+        std::string unmaskedData;
+
+        int masked = (bytes[1] & 128) >> 7;
+        if (masked)
+        {
+            const char* mask = bytes + maskOffset;// masking key starts at the 10th byte.  It's four bytes long.
+            const char* payloadData = bytes + maskOffset + 4;// payload data starts at the 14th byte; length is passed into function
+
+            for (int i = 0; i < len; ++i)
+                unmaskedData += char(payloadData[i] ^ mask[i % 4]);
+        }
+            
+        int messageLength = unmaskedData.size();
+        return unmaskedData;
+    }
+
     const std::string ProcessWebSocketKey(const std::string& key)
     {
         unsigned char hash[SHA_DIGEST_LENGTH];
@@ -143,7 +206,7 @@ private:
 
     tcp::socket mSocket;
     //std::string mMessage;
-    enum {MAX_LENGTH = 16};
+    enum {MAX_LENGTH = 1024};
     char mMessage[MAX_LENGTH];
     std::string mFullBuffer;
 };
