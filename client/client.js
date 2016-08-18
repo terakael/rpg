@@ -7,22 +7,20 @@
 			ws = new WebSocket("ws://127.0.0.1:45555");
 			
 			ws.onopen = function() {
-				//ws.send("Message to send");
-				//alert("Message is sent!");
+				document.getElementById("connected").value = "yes";
 			}
 			
 			ws.onmessage = function(evt) {
-				var received = evt.data;
-				//alert("Message is received: " + received);
+				console.log(evt.data);
 			}
 			
 			ws.onclose = function() {
-				alert("Connection is closed");
+				document.getElementById("connected").value = "no";
 				ws = null;
 			}
 			
 			ws.onerror = function(evt) {
-				alert("Error: " + evt);
+				document.getElementById("connected").value = evt;
 				ws = null;
 			}
 		} else {
@@ -30,16 +28,17 @@
 		}
 	});
 	
-	var messageButton = document.getElementById("Message");
+	var messageButton = document.getElementById("submit");
 	messageButton.addEventListener("click", function() {
 		if (!ws)
 			return;
 		
-		//alert("sending message");
-		ws.send(JSON.stringify({
-			action: "logon",
-			username: "sampleuser",
-			password: "samplepassword"
-		}));
+		var msg = {
+			action: "message",
+			message: document.getElementById("message").value
+		};
+		ws.send(JSON.stringify(msg));
+		
+		document.getElementById("message").value = "";
 	});
 })();
