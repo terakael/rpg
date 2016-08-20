@@ -264,8 +264,7 @@ int main()
 class chat_message
 {
 public:
-    enum { header_length = 4 };
-    enum { max_body_length = 512 };
+    enum { max_body_length = 65535};
     enum { chunk_length = 32 };
 
     chat_message()
@@ -285,17 +284,17 @@ public:
 
     std::size_t length() const
     {
-        return header_length + body_length_;
+        return body_length_;
     }
 
     const char* body() const
     {
-        return data_ + header_length;
+        return data_;
     }
 
     char* body()
     {
-        return data_ + header_length;
+        return data_;
     }
 
     std::size_t body_length() const
@@ -310,28 +309,49 @@ public:
             body_length_ = max_body_length;
     }
 
-    bool decode_header()
-    {
-        char header[header_length + 1] = "";
-        std::strncat(header, data_, header_length);
-        body_length_ = std::atoi(header);
-        if (body_length_ > max_body_length)
-        {
-            body_length_ = 0;
-            return false;
-        }
-        return true;
-    }
+	void set(std::string data)
+	{
+		// construct the frame here
 
-    void encode_header()
-    {
-        char header[header_length + 1] = "";
-        std::sprintf(header, "%4d", body_length_);
-        std::memcpy(data_, header, header_length);
-    }
+		char size;
+		if (data.size() <= 125)
+			size = data.size();
+		else if (data.size() > 125 && data.size() < 65535)
+			size = 126;
+		else if (data.size() > 65535)
+			size = 127;
+
+		// datasize + 2 for <= 125 (no extended payload length)
+		// datasize + 4 for == 126 (2byte payload length)
+		// datasize + 8 for == 127 (8 byte payload length)
+		int offset = 2;
+		if (size == 126)
+			offset = 4;
+		body_length_ = data.size() + offset;
+		char* tmp = new char[body_length_];
+		tmp[0] = 129;
+		//tmp[1] = *(char*)(ntohs(size));
+		tmp[1] = size;
+		if (size == 126)
+		{
+			uint16_t datasize = data.size();
+			tmp[2] = (datasize & 0xff00) >> 8;
+			tmp[3] = datasize & 0x00ff;
+		}
+		else if (size == 127)
+		{
+
+		}
+		for (int i = 0; i < data.size(); ++i)
+			tmp[i+offset] = data[i];
+
+		std::memcpy(data_, tmp, body_length_);
+
+		delete tmp;
+	}
 
 private:
-    char data_[header_length + max_body_length];
+    char data_[max_body_length];
     std::size_t body_length_;
 };
 
@@ -416,12 +436,25 @@ private:
     {
         auto self(shared_from_this());
         boost::asio::async_read(socket_,
-            boost::asio::buffer(read_msg_.data(), chat_message::header_length),
+            boost::asio::buffer(read_msg_.data(), 2),
             [this, self](boost::system::error_code ec, std::size_t /*length*/)
         {
-            if (!ec && read_msg_.decode_header())
+            if (!ec)
             {
-                do_read_body();
+                //do_read_body();
+				unsigned int result = read_msg_.data()[1] & 127;
+				switch (result)
+				{
+				case 127:
+					do_read_header_ext(6);// read the next six bytes to get the extended length
+					break;
+				case 126:
+					do_read_header_ext(2);// read the next two bytes to get the extended length
+					break;
+				default:
+					do_read_key(result);// straight up read the key; no need to check the extended length
+					break;
+				}
             }
             else
             {
@@ -430,17 +463,71 @@ private:
         });
     }
 
-    void do_read_body()
+	void do_read_header_ext(const int len)//do_read_header2 reads the extended length; 2 or 6 bytes
+	{
+		auto self(shared_from_this());
+		boost::asio::async_read(socket_,
+			boost::asio::buffer(read_msg_.data(), len),
+			[this, self, len](boost::system::error_code ec, std::size_t /*length*/)
+		{
+			if (!ec)
+			{
+				//do_read_body();
+				unsigned int l = 0;
+				if (len == 2)
+					l = (unsigned int)htons(*(uint16_t*)(read_msg_.data()));
+				else if (len == 6)
+					l = (unsigned int)htonll(*(uint64_t*)(read_msg_.data()));
+
+				do_read_key(l);
+			}
+			else
+			{
+				room_.leave(shared_from_this());
+			}
+		});
+	}
+
+	void do_read_key(const unsigned int bodyLen)
+	{
+		auto self(shared_from_this());
+		boost::asio::async_read(socket_,
+			boost::asio::buffer(read_msg_.data(), 4),
+			[this, self, bodyLen](boost::system::error_code ec, std::size_t /*length*/)
+		{
+			if (!ec)
+			{
+				key[0] = read_msg_.data()[0];
+				key[1] = read_msg_.data()[1];
+				key[2] = read_msg_.data()[2];
+				key[3] = read_msg_.data()[3];
+				do_read_body(bodyLen);
+			}
+			else
+			{
+				room_.leave(shared_from_this());
+			}
+		});
+	}
+
+    void do_read_body(const unsigned int len)
     {
         auto self(shared_from_this());
         boost::asio::async_read(socket_,
-            boost::asio::buffer(read_msg_.body(), read_msg_.body_length()),
-            [this, self](boost::system::error_code ec, std::size_t /*length*/)
+            boost::asio::buffer(read_msg_.body(), len),
+            [this, self, len](boost::system::error_code ec, std::size_t /*length*/)
         {
             if (!ec)
             {
-                room_.deliver(read_msg_);
-                do_read_header();
+				std::string unmaskedData;
+				for (int i = 0; i < len; ++i)
+					unmaskedData += char(read_msg_.body()[i] ^ key[i % 4]);
+
+				// i guess some processing of the message might go here, then send a response.
+				send_msg_.set("Received message: " + unmaskedData);
+				room_.deliver(send_msg_);
+
+				do_read_header();
             }
             else
             {
@@ -545,9 +632,11 @@ private:
 
     tcp::socket socket_;
     chat_room& room_;
-    chat_message read_msg_;
+	chat_message read_msg_;
+	chat_message send_msg_;
     chat_message_queue write_msgs_;
     std::string buf;
+	char key[4];
 };
 
 //----------------------------------------------------------------------
