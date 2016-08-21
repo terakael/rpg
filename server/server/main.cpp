@@ -12,6 +12,11 @@
 #include <set>
 #include "json.h"
 
+#define OTL_ODBC_MSSQL_2008
+#define OTL_STL
+#define OTL_ANSI_CPP
+#include "otlv4.h"
+
 
 #define htonll(x) ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32))
 
@@ -553,8 +558,6 @@ private:
 		const std::string action = req.Extract("action");
 		if (action == "newpos")
 		{
-			// {action:"newpos",pos:{x:0,y:0}}
-
 			dmkJson pos = req.ExtractObject("pos");
 			float x = pos.ExtractFloat("x");
 			float y = pos.ExtractFloat("y");
@@ -565,6 +568,8 @@ private:
 		{
 
 		}
+
+		res.Add("success", "1");
 		
 		return res.toString();
 	}
@@ -704,6 +709,36 @@ private:
     chat_room room_;
 };
 
+bool loadDatabase()
+{
+	otl_connect db;
+	otl_connect::otl_initialize();
+
+	try
+	{
+		db.rlogon("dsn=dmk");
+
+		// print out all the dmkGameSettings contents
+		std::string id, desc, val;
+		std::string stmt = "{call dmkAddExp(:PlayerId<int,in>,:StatId<int,in>,:Experience<int,in>)}";
+		otl_stream o(1, stmt.c_str(), db);
+		o.set_commit(0);
+
+		o << 1 << 4 << 5;
+	}
+	catch (otl_exception& p)
+	{
+		std::cout << "dberr: " << p.msg << std::endl;
+		std::cout << "text: " << p.stm_text << std::endl;
+		std::cout << "info: " << p.var_info << std::endl;
+		return false;
+	}
+
+	db.logoff();
+
+	return true;
+}
+
 //----------------------------------------------------------------------
 
 int main(int argc, char* argv[])
@@ -715,6 +750,8 @@ int main(int argc, char* argv[])
             std::cerr << "Usage: chat_server <port> [<port> ...]\n";
             return 1;
         }
+
+		loadDatabase();
 
         boost::asio::io_service io_service;
 
