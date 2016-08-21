@@ -35,7 +35,9 @@
 		
 		var msg = {
 			action: "message",
-			message: document.getElementById("message").value
+			message: document.getElementById("message").value,
+			test: null,
+			test2: false
 		};
 		ws.send(JSON.stringify(msg));
 		

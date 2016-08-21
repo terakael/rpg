@@ -10,6 +10,8 @@
 #include <openssl/sha.h>
 #include <ctime>
 #include <set>
+#include "json.h"
+
 
 #define htonll(x) ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32))
 
@@ -261,6 +263,11 @@ int main()
 
 #else
 
+void trace(const std::string& msg)
+{
+	std::cout << msg << std::endl;
+}
+
 class chat_message
 {
 public:
@@ -315,7 +322,7 @@ public:
 
 		char size;
 		if (data.size() <= 125)
-			size = data.size();
+			size = (char)data.size();
 		else if (data.size() > 125 && data.size() < 65535)
 			size = 126;
 		else if (data.size() > 65535)
@@ -330,11 +337,10 @@ public:
 		body_length_ = data.size() + offset;
 		char* tmp = new char[body_length_];
 		tmp[0] = 129;
-		//tmp[1] = *(char*)(ntohs(size));
 		tmp[1] = size;
 		if (size == 126)
 		{
-			uint16_t datasize = data.size();
+			uint16_t datasize = (uint16_t)data.size();
 			tmp[2] = (datasize & 0xff00) >> 8;
 			tmp[3] = datasize & 0x00ff;
 		}
@@ -417,7 +423,6 @@ public:
     void start()
     {
         room_.join(shared_from_this());
-
         do_read_handshake();
     }
 
@@ -441,7 +446,6 @@ private:
         {
             if (!ec)
             {
-                //do_read_body();
 				unsigned int result = read_msg_.data()[1] & 127;
 				switch (result)
 				{
@@ -472,7 +476,6 @@ private:
 		{
 			if (!ec)
 			{
-				//do_read_body();
 				unsigned int l = 0;
 				if (len == 2)
 					l = (unsigned int)htons(*(uint16_t*)(read_msg_.data()));
@@ -520,11 +523,12 @@ private:
             if (!ec)
             {
 				std::string unmaskedData;
-				for (int i = 0; i < len; ++i)
+				for (unsigned int i = 0; i < len; ++i)
 					unmaskedData += char(read_msg_.body()[i] ^ key[i % 4]);
 
 				// i guess some processing of the message might go here, then send a response.
-				send_msg_.set("Received message: " + unmaskedData);
+				// todo: send it off to a worker pool of threads with a callback to deliver the message.
+				send_msg_.set(process_request(unmaskedData));
 				room_.deliver(send_msg_);
 
 				do_read_header();
@@ -535,6 +539,35 @@ private:
             }
         });
     }
+
+	const std::string process_request(const std::string& request)
+	{
+		dmkJson req, res;
+		if (!req.Parse(request))
+		{
+			res.Add("success", "0");
+			res.Add("responsetext", "error parsing request");
+			return res.toString();
+		}
+
+		const std::string action = req.Extract("action");
+		if (action == "newpos")
+		{
+			// {action:"newpos",pos:{x:0,y:0}}
+
+			dmkJson pos = req.ExtractObject("pos");
+			float x = pos.ExtractFloat("x");
+			float y = pos.ExtractFloat("y");
+
+			trace("received pos: " + pos.toString());
+		}
+		else if (action == "message")
+		{
+
+		}
+		
+		return res.toString();
+	}
 
     void do_read_handshake()
     {
@@ -655,8 +688,7 @@ public:
 private:
     void do_accept()
     {
-        acceptor_.async_accept(socket_,
-            [this](boost::system::error_code ec)
+        acceptor_.async_accept(socket_, [this](boost::system::error_code ec)
         {
             if (!ec)
             {

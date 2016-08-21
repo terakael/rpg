@@ -1,0 +1,7 @@
+*.user
+*.opendb
+*.VC*
+*.sdf
+*.suo
+*/Debug/*
+*/x64/*
