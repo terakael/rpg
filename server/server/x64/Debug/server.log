@@ -1,7 +1,0 @@
-﻿  main.cpp
-c:\dev\projects\rpg\server\server\otlv4.h(15493): warning C4297: 'otl_stream::~otl_stream': function assumed not to throw an exception but does
-  c:\dev\projects\rpg\server\server\otlv4.h(15493): note: destructor or deallocator has a (possibly implicit) non-throwing exception specification
-c:\dev\projects\rpg\server\server\main.cpp(344): warning C4309: '=': truncation of constant value
-c:\dev\projects\rpg\server\server\main.cpp(488): warning C4244: 'argument': conversion from 'uint64_t' to 'u_long', possible loss of data
-  server.vcxproj -> C:\Dev\Projects\rpg\server\x64\Debug\server.exe
-  server.vcxproj -> C:\Dev\Projects\rpg\server\x64\Debug\server.pdb (Full PDB)

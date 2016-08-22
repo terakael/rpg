@@ -17,6 +17,12 @@
 #define OTL_ANSI_CPP
 #include "otlv4.h"
 
+#include "player.h"
+#include "stats.h"
+
+std::map<std::string, std::string> credentials;
+std::map<int, std::shared_ptr<Player>> players;
+
 
 #define htonll(x) ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32))
 
@@ -309,36 +315,33 @@ public:
         return data_;
     }
 
-    std::size_t body_length() const
-    {
-        return body_length_;
-    }
-
-    void body_length(std::size_t new_length)
-    {
-        body_length_ = new_length;
-        if (body_length_ > max_body_length)
-            body_length_ = max_body_length;
-    }
-
 	void set(std::string data)
 	{
 		// construct the frame here
 
 		char size;
-		if (data.size() <= 125)
-			size = (char)data.size();
-		else if (data.size() > 125 && data.size() < 65535)
-			size = 126;
-		else if (data.size() > 65535)
-			size = 127;
+		int offset = 0;
 
-		// datasize + 2 for <= 125 (no extended payload length)
-		// datasize + 4 for == 126 (2byte payload length)
-		// datasize + 8 for == 127 (8 byte payload length)
-		int offset = 2;
-		if (size == 126)
+		// data.size + 2 for <= 125 (no extended payload length)
+		// data.size + 4 for == 126 (2byte payload length)
+		// data.size + 8 for == 127 (8 byte payload length)
+		if (data.size() <= 125)
+		{
+			size = (char)data.size();
+			offset = 2;
+		}
+		else if (data.size() > 125 && data.size() <= 65535)
+		{
+			size = 126;
 			offset = 4;
+		}
+		else if (data.size() > 65535)
+		{
+			size = 127;
+			offset = 8;
+		}
+		
+
 		body_length_ = data.size() + offset;
 		char* tmp = new char[body_length_];
 		tmp[0] = 129;
@@ -351,14 +354,15 @@ public:
 		}
 		else if (size == 127)
 		{
-
+			// todo
+			assert(false);
 		}
 		for (int i = 0; i < data.size(); ++i)
 			tmp[i+offset] = data[i];
 
 		std::memcpy(data_, tmp, body_length_);
 
-		delete tmp;
+		delete[] tmp;
 	}
 
 private:
@@ -548,6 +552,7 @@ private:
 	const std::string process_request(const std::string& request)
 	{
 		dmkJson req, res;
+		res.Add("success", "1");
 		if (!req.Parse(request))
 		{
 			res.Add("success", "0");
@@ -558,18 +563,58 @@ private:
 		const std::string action = req.Extract("action");
 		if (action == "newpos")
 		{
+			int pid;
+			if (!req.ExtractIfExists("id", pid))
+			{
+				res.Add("success", "0");
+				return res.toString();
+			}
+
 			dmkJson pos = req.ExtractObject("pos");
-			float x = pos.ExtractFloat("x");
-			float y = pos.ExtractFloat("y");
+			int x = pos.ExtractInt("x");
+			int y = pos.ExtractInt("y");
+
+			if (players.find(pid) != players.end())
+				players[pid]->SetPos(x, y);
 
 			trace("received pos: " + pos.toString());
 		}
-		else if (action == "message")
+		else if (action == "logon")
+		{
+			const std::string username = req.Extract("username");
+			const std::string password = req.Extract("password");
+
+			const auto& iter = credentials.find(username);
+			bool success = iter != credentials.end();
+			if (success)
+				success = iter->second == password;
+
+			if (success)
+			{
+				// successful logon
+				std::shared_ptr<Player> player;
+				for (const auto& iter : players)
+				{
+					if (iter.second->GetName() == username)
+					{
+						player = iter.second;
+						break;
+					}
+				}
+
+				if (player)
+				{
+					res.Add("action", "logon");
+					res.Add("data", player->getJson());
+				}
+			}
+			else
+				res.Add("success", "0");
+		}
+		else if (action == "")
 		{
 
 		}
-
-		res.Add("success", "1");
 		
 		return res.toString();
 	}
@@ -693,8 +738,7 @@ public:
 private:
     void do_accept()
     {
-        acceptor_.async_accept(socket_, [this](boost::system::error_code ec)
-        {
+        acceptor_.async_accept(socket_, [this](boost::system::error_code ec) {
             if (!ec)
             {
                 std::make_shared<chat_session>(std::move(socket_), room_)->start();
@@ -709,6 +753,40 @@ private:
     chat_room room_;
 };
 
+bool loadPlayers(otl_connect& db)
+{
+	int id;
+	std::string name, pw;
+	std::string stmt = "select Id, Name, Password from dmkPlayer";
+	otl_stream s(50, stmt.c_str(), db);
+	while (!s.eof())
+	{
+		s >> id >> name >> pw;
+		players[id] = std::make_shared<Player>(id, name);
+		credentials[name] = pw;
+	}
+	s.close();
+
+	stmt = "select StatId, StatName, Experience from dmkPlayerStatsView where PlayerId=";
+	for (const auto& iter : players)
+	{
+		std::shared_ptr<Stats> stats = std::make_shared<Stats>(iter.first);
+		std::string select = stmt + std::to_string(iter.first);
+		s.open(10, select.c_str(), db);
+		int statid, exp;
+		std::string statName;
+		while (!s.eof())
+		{
+			s >> statid >> statName >> exp;
+			stats->Set(statid, statName, exp);
+		}
+
+		iter.second->SetStats(stats);
+	}
+
+	return true;
+}
+
 bool loadDatabase()
 {
 	otl_connect db;
@@ -718,13 +796,14 @@ bool loadDatabase()
 	{
 		db.rlogon("dsn=dmk");
 
-		// print out all the dmkGameSettings contents
-		std::string id, desc, val;
-		std::string stmt = "{call dmkAddExp(:PlayerId<int,in>,:StatId<int,in>,:Experience<int,in>)}";
-		otl_stream o(1, stmt.c_str(), db);
-		o.set_commit(0);
+		loadPlayers(db);
 
-		o << 1 << 4 << 5;
+		//std::string id, desc, val;
+		//std::string stmt = "{call dmkAddExp(:PlayerId<int,in>,:StatId<int,in>,:Experience<int,in>)}";
+		//otl_stream o(1, stmt.c_str(), db);
+		//o.set_commit(0);
+
+		//o << 1 << 4 << 5;
 	}
 	catch (otl_exception& p)
 	{

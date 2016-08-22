@@ -41,7 +41,14 @@ float dmkJson::ExtractFloat(const std::string& key)
 int dmkJson::ExtractInt(const std::string& key)
 {
 	if (mDoc.HasMember(key))
-		return mDoc[key].GetInt();
+	{
+		if (mDoc[key].IsInt())
+			return mDoc[key].GetInt();
+		if (mDoc[key].IsString())
+			return atoi(mDoc[key].GetString());
+		else if (mDoc[key].IsFloat())
+			return (int)mDoc[key].GetFloat();
+	}
 	return -1;
 }
 
@@ -86,6 +93,18 @@ bool dmkJson::ExtractIfExists(const std::string& key, std::string& val)
 	return false;
 }
 
+bool dmkJson::ExtractIfExists(const std::string& key, int& val)
+{
+	if (!mDoc.HasMember(key))
+		return false;
+
+	if (mDoc[key].IsString())
+		val = atoi(mDoc[key].GetString());
+	else if (mDoc[key].IsInt())
+		val = mDoc[key].GetInt();
+	return true;
+}
+
 bool dmkJson::ExtractList(const std::string& key, std::list<std::string>& list)
 {
 	if (!mDoc.HasMember(key) || !mDoc[key].IsArray())
@@ -104,6 +123,26 @@ bool dmkJson::Add(const std::string& key, const std::string& val, bool replaceEx
 		Remove(key);
 	auto& a = mDoc.GetAllocator();
 	mDoc.AddMember(Value(key, a).Move(), Value(val, a).Move(), a);
+	return true;
+}
+
+bool dmkJson::Add(const std::string& key, const int val, bool replaceExisting)
+{
+	return Add(key, std::to_string(val), replaceExisting);
+}
+
+bool dmkJson::Add(const std::string& key, const float val, bool replaceExisting)
+{
+	return Add(key, std::to_string(val), replaceExisting);
+}
+
+bool dmkJson::Add(const std::string& key, const dmkJson& obj, bool replaceExisting)
+{
+	Value tmp;
+	tmp.SetObject();
+	for (Value::ConstMemberIterator iter = obj.mDoc.MemberBegin(); iter != obj.mDoc.MemberEnd(); ++iter)
+		tmp.AddMember(Value(iter->name, mDoc.GetAllocator()).Move(), Value(iter->value, mDoc.GetAllocator()).Move(), mDoc.GetAllocator());
+	mDoc.AddMember(Value(key, mDoc.GetAllocator()).Move(), tmp, mDoc.GetAllocator());
 	return true;
 }
 
